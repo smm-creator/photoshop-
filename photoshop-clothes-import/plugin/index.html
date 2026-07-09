@@ -7,10 +7,10 @@
   <script src="main.js"></script>
 </head>
 <body>
-  <h1>Import Raster</h1>
+  <h1>Import Open Docs</h1>
   <p class="hint">
-    Active document = master PSD. Files open as documents, then duplicate as
-    <strong>normal pixel layers</strong> — never Place / Smart Object.
+    Active tab = master PSD. All other open tabs (ARW, JPG, PSD, …) are copied
+    in as <strong>normal pixel layers</strong>, then closed. No file picker.
   </p>
 
   <label class="field">
@@ -31,7 +31,7 @@
     Strip file extension from layer name
   </label>
 
-  <button id="btnImport" class="cta">Choose files &amp; import</button>
+  <button id="btnImport" class="cta">Import all other open tabs</button>
   <pre id="log" class="log"></pre>
 </body>
 </html>

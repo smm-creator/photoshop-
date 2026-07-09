@@ -6,19 +6,25 @@ Research-backed plan + MVP for importing many clothing sources into one master P
 
 ## 1. Brief conclusion
 
-**Recommended for Photoshop 2026:** hybrid delivery of the **same pipeline**:
+**Recommended production mode (Variant A):**
 
-1. **Ship now:** UXP script (`.psjs`) *or* ExtendScript (`.jsx`) — open → prepare pixel layer → `duplicate` into master → close.
-2. **Scale later:** thin **UXP panel** with the identical core (modes, progress, log).
+1. Active document = master PSD  
+2. All **other already-open Photoshop tabs** = sources (any type PS opened: ARW, JPG, PNG, TIFF, PSD, PSB, …)  
+3. Script merges/duplicates each source into the master as a **normal pixel layer**  
+4. Closes source tabs — **no file picker, no format filter**
 
-**Why this wins for apparel retouch production**
+**Delivery:**
 
-- Official UXP DOM already exposes `app.open`, `duplicateLayers(layers, targetDocument)`, `mergeVisibleLayers`, `closeWithoutSaving` — enough for this job without Place.
-- Cross-document **duplicate** copies an ArtLayer as a normal layer; Place Embedded/Linked creates Smart Objects (forbidden here).
-- ExtendScript is still alive in 2026 for faceless automation and is the fastest drop-in for retouchers who already use `File → Scripts`.
-- UXP is the forward path for panels; Adobe keeps UXP and JSX separate (no supported “run JSX from UXP”).
+1. **Ship now:** ExtendScript `.jsx` or UXP `.psjs` with Variant A  
+2. **Scale later:** UXP panel with the same core  
 
-**Do not use:** Actions that record Place; scripts that call `newPlacedLayer` / Place Linked; ACR “Open as Smart Objects”.
+**Why this wins**
+
+- ARW/RAW already opened through Camera Raw become normal documents — script just transfers them  
+- No Explorer dialog, no extension whitelist blocking PSD/ARW  
+- Cross-document `duplicate` / `duplicateLayers` keeps ordinary pixel layers (no Place / Smart Object)
+
+**Do not use:** Place Embedded/Linked; `newPlacedLayer`; ACR “Open as Smart Objects” as the import path.
 
 ---
 

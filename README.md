@@ -1,5 +1,5 @@
 # Photoshop clothes retouch automation
 
-Practical MVP for Adobe Photoshop 2026: import many clothing source files into one master PSD as **ordinary raster layers** (no Smart Objects / Place).
+Variant A: import **all other open Photoshop tabs** into the active master PSD as **ordinary raster layers** (ARW/JPG/PSD/… — whatever is already open). No file picker. No Smart Objects / Place.
 
-See [`photoshop-clothes-import/`](photoshop-clothes-import/) for scripts, UXP panel scaffold, research notes, and architecture.
+See [`photoshop-clothes-import/`](photoshop-clothes-import/) for scripts and docs.

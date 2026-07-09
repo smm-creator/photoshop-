@@ -1,38 +1,18 @@
 /**
- * Clothes Retouch — Import as Raster Layers (UXP Script MVP)
+ * Clothes Retouch — Import Open Documents as Raster Layers (UXP)
  * File: ImportAsRasterLayers.psjs
  *
- * Target: Adobe Photoshop 2024–2026 (UXP scripting since 23.5)
- *
- * What it does:
- *  1. Uses the currently active document as the master PSD receiver
- *  2. Lets the user pick multiple files
- *  3. Opens each file as a document (NOT Place Embedded / Linked)
- *  4. Builds a normal pixel layer (merged or top pixel layer)
- *  5. Duplicates that layer into the master PSD
- *  6. Names the layer after the file
- *  7. Closes the source without saving
- *  8. Restores focus to the master PSD
- *
- * Forbidden by design:
- *  - Place Embedded / Place Linked
- *  - Convert to Smart Object / newPlacedLayer
- *  - Camera Raw "open as Smart Object" placement path
- *
- * Install / run:
- *  File → Scripts → Browse… → select this .psjs
- *  or drag onto Photoshop (Win / Mac app frame)
- *
- * Production note (Camera Raw):
- *  On retoucher machines set Camera Raw Preferences → File Handling →
- *  JPEG/HEIC and TIFF Handling to "Disable … Support".
- *  RAW/DNG are excluded from the default picker types.
+ * Variant A:
+ *  - Active document = master receiver
+ *  - All OTHER currently open documents = sources (any type Photoshop opened:
+ *    ARW, CR2, NEF, JPG, PNG, TIFF, PSD, PSB, etc.)
+ *  - No file picker / no Explorer dialog
+ *  - Transfer as ordinary pixel layers via duplicateLayers
+ *  - Close sources without saving
  */
 
 const photoshop = require("photoshop");
-const uxp = require("uxp");
 const { app, core, constants } = photoshop;
-const fs = uxp.storage.localFileSystem;
 
 /** @typedef {"merged" | "topPixel"} ImportMode */
 
@@ -43,16 +23,14 @@ const CONFIG = {
   importGroupName: "IMPORT",
   stripExtensionFromLayerName: true,
   activateLastImportedLayer: true,
-  // Keep RAW out of the default picker — ACR pipeline is interactive / SO-prone
-  allowedExtensions: ["jpg", "jpeg", "png", "tif", "tiff", "psd", "psb", "webp"],
 };
 
 function stripExtension(name) {
   return String(name).replace(/\.[^.]+$/i, "");
 }
 
-function layerNameFromEntry(entry) {
-  const base = entry.name || "imported";
+function layerNameFromDoc(doc) {
+  const base = doc.name || "imported";
   return CONFIG.stripExtensionFromLayerName ? stripExtension(base) : base;
 }
 
@@ -61,7 +39,6 @@ function kindOf(layer) {
 }
 
 function isPixelLayer(layer) {
-  // Docs: LayerKind.NORMAL; some builds expose string "pixel"
   const k = kindOf(layer).toLowerCase();
   return (
     layer &&
@@ -89,30 +66,18 @@ function isGroupLayer(layer) {
   );
 }
 
-/**
- * Find or create top-level group IMPORT in master doc.
- */
 async function ensureImportGroup(masterDoc) {
-  let existing = null;
   for (let i = 0; i < masterDoc.layers.length; i++) {
     const l = masterDoc.layers[i];
     if (isGroupLayer(l) && l.name === CONFIG.importGroupName) {
-      existing = l;
-      break;
+      return l;
     }
   }
-  if (existing) return existing;
   return masterDoc.createLayerGroup({ name: CONFIG.importGroupName });
 }
 
-/**
- * Prepare a single ordinary pixel layer in the source document.
- * Never uses Place / Smart Object creation.
- */
 async function prepareSourcePixelLayer(sourceDoc, desiredName) {
   if (CONFIG.importMode === "merged") {
-    // Ensure there is something to merge; mergeVisibleLayers keeps a non-Background
-    // pixel layer when possible (unlike flatten).
     if (sourceDoc.layers.length > 1 || sourceDoc.backgroundLayer) {
       await sourceDoc.mergeVisibleLayers();
     }
@@ -124,20 +89,17 @@ async function prepareSourcePixelLayer(sourceDoc, desiredName) {
       await layer.rasterize();
     }
     if (!isPixelLayer(layer) && typeof layer.rasterize === "function") {
-      // Adjustment / text / etc. after unexpected open — force rasterize when available
       await layer.rasterize();
     }
     layer.name = desiredName;
     return layer;
   }
 
-  // Mode: top / active pixel layer (prefer active, else topmost pixel-ish layer)
   let layer = sourceDoc.activeLayers[0] || sourceDoc.layers[0];
   if (!layer) {
     throw new Error(`No layers in "${sourceDoc.name}"`);
   }
   if (isGroupLayer(layer)) {
-    // Walk into group for first child
     const kids = layer.layers || [];
     layer = kids[0] || layer;
   }
@@ -151,9 +113,6 @@ async function prepareSourcePixelLayer(sourceDoc, desiredName) {
   return layer;
 }
 
-/**
- * Assert duplicated layer is a normal pixel layer; rasterize as last resort.
- */
 async function assertRasterLayer(layer) {
   if (!layer) return null;
   if (isSmartObject(layer)) {
@@ -165,20 +124,24 @@ async function assertRasterLayer(layer) {
   return layer;
 }
 
-async function importOneFile(entry, masterDoc, importGroup) {
-  const desiredName = layerNameFromEntry(entry);
-  let sourceDoc = null;
+function collectSourceDocuments(masterDoc) {
+  const sources = [];
+  for (let i = 0; i < app.documents.length; i++) {
+    const doc = app.documents[i];
+    if (doc.id !== masterDoc.id) {
+      sources.push(doc);
+    }
+  }
+  return sources;
+}
+
+async function importOneOpenDocument(sourceDoc, masterDoc, importGroup) {
+  const desiredName = layerNameFromDoc(sourceDoc);
+  const sourceId = sourceDoc.id;
 
   try {
-    // CRITICAL: open as document — do NOT use place / placeEvent / newPlacedLayer
-    sourceDoc = await app.open(entry);
-    if (!sourceDoc) {
-      throw new Error(`Failed to open: ${entry.name}`);
-    }
-
+    app.activeDocument = sourceDoc;
     const sourceLayer = await prepareSourcePixelLayer(sourceDoc, desiredName);
-
-    // Cross-document duplicate → ordinary layer copy in master (not a linked/placed SO)
     const copies = await sourceDoc.duplicateLayers([sourceLayer], masterDoc);
     let imported = copies && copies[0];
     imported = await assertRasterLayer(imported);
@@ -186,46 +149,55 @@ async function importOneFile(entry, masterDoc, importGroup) {
     if (imported) {
       imported.name = desiredName;
       if (CONFIG.putIntoImportGroup && importGroup) {
-        // placeInside only valid when relativeObject is a group
         await imported.move(importGroup, constants.ElementPlacement.PLACEINSIDE);
       }
     }
 
     return imported;
   } finally {
-    if (sourceDoc) {
-      try {
-        sourceDoc.closeWithoutSaving();
-      } catch (closeErr) {
-        // Document may already be closed; ignore
+    // Close source by id if still open
+    try {
+      let still = null;
+      for (let i = 0; i < app.documents.length; i++) {
+        if (app.documents[i].id === sourceId) {
+          still = app.documents[i];
+          break;
+        }
       }
+      if (still) {
+        still.closeWithoutSaving();
+      }
+    } catch (_) {
+      /* ignore */
     }
   }
-}
-
-async function pickFiles() {
-  const picked = await fs.getFileForOpening({
-    allowMultiple: true,
-    types: CONFIG.allowedExtensions,
-  });
-  if (!picked) return [];
-  return Array.isArray(picked) ? picked : [picked];
 }
 
 async function runImport(executionContext) {
   const masterDoc = app.activeDocument;
   if (!masterDoc) {
-    await app.showAlert("Open the master PSD first, then run this script.");
+    await app.showAlert("Open the master PSD first, then open other photos as tabs.");
+    return;
+  }
+
+  if (app.documents.length < 2) {
+    await app.showAlert(
+      "Need at least 2 open documents.\n\n" +
+        "1) Open master PSD (keep it active)\n" +
+        "2) Open other photos as tabs (ARW, JPG, PSD, ...)\n" +
+        "3) Click back on the master PSD\n" +
+        "4) Run this script again"
+    );
     return;
   }
 
   const masterId = masterDoc.id;
-  const files = await pickFiles();
-  if (!files.length) {
+  const sources = collectSourceDocuments(masterDoc);
+  if (!sources.length) {
+    await app.showAlert("No other open documents to import.");
     return;
   }
 
-  // Host may already be modal for .psjs; nesting is allowed and shares modal state.
   const importGroup = CONFIG.putIntoImportGroup
     ? await ensureImportGroup(masterDoc)
     : null;
@@ -234,25 +206,25 @@ async function runImport(executionContext) {
   let lastImported = null;
   let okCount = 0;
 
-  // Progress UI when available (UXP script / plugin modal context)
   if (executionContext && executionContext.reportProgress) {
-    executionContext.reportProgress({ value: 0, commandName: "Import raster layers" });
+    executionContext.reportProgress({ value: 0, commandName: "Import open documents" });
   }
 
-  for (let i = 0; i < files.length; i++) {
-    const entry = files[i];
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i];
+    const srcName = src.name;
     if (executionContext && executionContext.reportProgress) {
       executionContext.reportProgress({
-        value: i / files.length,
-        commandName: `Import ${entry.name} (${i + 1}/${files.length})`,
+        value: i / sources.length,
+        commandName: `Import ${srcName} (${i + 1}/${sources.length})`,
       });
     }
     try {
-      lastImported = await importOneFile(entry, masterDoc, importGroup);
+      app.activeDocument = masterDoc;
+      lastImported = await importOneOpenDocument(src, masterDoc, importGroup);
       okCount += 1;
     } catch (err) {
-      errors.push(`${entry.name}: ${err && err.message ? err.message : String(err)}`);
-      // Best-effort: close any stray active non-master doc
+      errors.push(`${srcName}: ${err && err.message ? err.message : String(err)}`);
       try {
         const active = app.activeDocument;
         if (active && active.id !== masterId) {
@@ -264,7 +236,6 @@ async function runImport(executionContext) {
     }
   }
 
-  // Restore master focus (assign activeDocument — documented UXP pattern)
   let stillOpen = null;
   for (let i = 0; i < app.documents.length; i++) {
     if (app.documents[i].id === masterId) {
@@ -283,7 +254,7 @@ async function runImport(executionContext) {
     executionContext.reportProgress({ value: 1, commandName: "Import done" });
   }
 
-  const summary = `Imported ${okCount}/${files.length} file(s) as raster layers into "${masterDoc.name}".`;
+  const summary = `Imported ${okCount}/${sources.length} open document(s) as raster layers into "${masterDoc.name}".`;
   if (errors.length) {
     await app.showAlert(
       `${summary}\n\nErrors (${errors.length}):\n` + errors.slice(0, 8).join("\n")
@@ -296,10 +267,9 @@ async function runImport(executionContext) {
 async function main() {
   try {
     await core.executeAsModal(runImport, {
-      commandName: "Import as Raster Layers",
+      commandName: "Import Open Docs as Raster Layers",
     });
   } catch (err) {
-    // Some .psjs hosts already provide modal context; retry bare if needed
     const msg = err && err.message ? err.message : String(err);
     if (/modal/i.test(msg)) {
       await runImport(null);

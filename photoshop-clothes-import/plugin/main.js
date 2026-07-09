@@ -1,11 +1,8 @@
 /**
- * UXP panel scaffold — same core pipeline as ImportAsRasterLayers.psjs
- * Load via UXP Developer Tool for day-to-day retouch UI.
+ * UXP panel — Variant A: import all OTHER open documents into active master.
  */
 const photoshop = require("photoshop");
-const uxp = require("uxp");
 const { app, core, constants } = photoshop;
-const fs = uxp.storage.localFileSystem;
 
 function log(msg) {
   const el = document.getElementById("log");
@@ -23,7 +20,6 @@ function readOptions() {
     putIntoImportGroup: document.getElementById("putIntoImportGroup").checked,
     stripExtension: document.getElementById("stripExtension").checked,
     importGroupName: "IMPORT",
-    allowedExtensions: ["jpg", "jpeg", "png", "tif", "tiff", "psd", "psb", "webp"],
   };
 }
 
@@ -59,18 +55,35 @@ async function prepareSourcePixelLayer(sourceDoc, desiredName, importMode) {
   if (!layer) throw new Error(`No layer in ${sourceDoc.name}`);
   if (isSmartObject(layer)) {
     await layer.rasterize();
-  } else if (typeof layer.rasterize === "function" && kindStr(layer) !== "normal" && kindStr(layer) !== "pixel") {
+  } else if (
+    typeof layer.rasterize === "function" &&
+    kindStr(layer) !== "normal" &&
+    kindStr(layer) !== "pixel"
+  ) {
     await layer.rasterize();
   }
   layer.name = desiredName;
   return layer;
 }
 
-async function importOneFile(entry, masterDoc, opts, importGroup) {
-  const desiredName = opts.stripExtension ? stripExtension(entry.name) : entry.name;
-  let sourceDoc = null;
+function collectSources(masterDoc) {
+  const sources = [];
+  for (let i = 0; i < app.documents.length; i++) {
+    if (app.documents[i].id !== masterDoc.id) {
+      sources.push(app.documents[i]);
+    }
+  }
+  return sources;
+}
+
+async function importOneOpenDocument(sourceDoc, masterDoc, opts, importGroup) {
+  const desiredName = opts.stripExtension
+    ? stripExtension(sourceDoc.name)
+    : sourceDoc.name;
+  const sourceId = sourceDoc.id;
+
   try {
-    sourceDoc = await app.open(entry);
+    app.activeDocument = sourceDoc;
     const sourceLayer = await prepareSourcePixelLayer(
       sourceDoc,
       desiredName,
@@ -89,12 +102,17 @@ async function importOneFile(entry, masterDoc, opts, importGroup) {
     }
     return imported;
   } finally {
-    if (sourceDoc) {
-      try {
-        sourceDoc.closeWithoutSaving();
-      } catch (_) {
-        /* ignore */
+    try {
+      let still = null;
+      for (let i = 0; i < app.documents.length; i++) {
+        if (app.documents[i].id === sourceId) {
+          still = app.documents[i];
+          break;
+        }
       }
+      if (still) still.closeWithoutSaving();
+    } catch (_) {
+      /* ignore */
     }
   }
 }
@@ -106,15 +124,17 @@ async function runImport() {
     await app.showAlert("Open the master PSD first.");
     return;
   }
-  const masterId = masterDoc.id;
+  if (app.documents.length < 2) {
+    await app.showAlert(
+      "Open other photos as tabs first, then click the master PSD and press Import."
+    );
+    return;
+  }
 
-  const picked = await fs.getFileForOpening({
-    allowMultiple: true,
-    types: opts.allowedExtensions,
-  });
-  const files = !picked ? [] : Array.isArray(picked) ? picked : [picked];
-  if (!files.length) {
-    log("Cancelled — no files selected.");
+  const masterId = masterDoc.id;
+  const sources = collectSources(masterDoc);
+  if (!sources.length) {
+    log("No other open documents.");
     return;
   }
 
@@ -126,24 +146,23 @@ async function runImport() {
 
       let ok = 0;
       let last = null;
-      const errors = [];
 
-      for (let i = 0; i < files.length; i++) {
-        const entry = files[i];
+      for (let i = 0; i < sources.length; i++) {
+        const src = sources[i];
         if (executionContext.reportProgress) {
           executionContext.reportProgress({
-            value: i / files.length,
-            commandName: `Import ${entry.name}`,
+            value: i / sources.length,
+            commandName: `Import ${src.name}`,
           });
         }
         try {
-          last = await importOneFile(entry, masterDoc, opts, importGroup);
+          app.activeDocument = masterDoc;
+          last = await importOneOpenDocument(src, masterDoc, opts, importGroup);
           ok += 1;
-          log(`OK: ${entry.name}`);
+          log(`OK: ${src.name}`);
         } catch (err) {
           const msg = err && err.message ? err.message : String(err);
-          errors.push(`${entry.name}: ${msg}`);
-          log(`ERR: ${entry.name} — ${msg}`);
+          log(`ERR: ${src.name} — ${msg}`);
           try {
             const active = app.activeDocument;
             if (active && active.id !== masterId) active.closeWithoutSaving();
@@ -165,9 +184,9 @@ async function runImport() {
         if (last) still.activeLayers = [last];
       }
 
-      await app.showAlert(`Imported ${ok}/${files.length} as raster layers.`);
+      await app.showAlert(`Imported ${ok}/${sources.length} open document(s).`);
     },
-    { commandName: "Import Raster Layers" }
+    { commandName: "Import Open Documents" }
   );
 }
 

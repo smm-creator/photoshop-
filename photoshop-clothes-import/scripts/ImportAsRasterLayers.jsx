@@ -1,23 +1,24 @@
 /*
- * Clothes Retouch — Import as Raster Layers (ExtendScript / JSX MVP)
+ * Clothes Retouch — Import Open Documents as Raster Layers
  * File: ImportAsRasterLayers.jsx
  *
- * Target: Adobe Photoshop (legacy scripting engine; still supported in 2025–2026)
+ * Variant A workflow:
+ *  1. Open your master PSD and make it ACTIVE
+ *  2. Open any other photos in Photoshop (ARW, JPG, PNG, TIFF, PSD, PSB, etc.)
+ *  3. Click back on the master PSD tab
+ *  4. Run this script
+ *  5. Every OTHER open document is merged/copied into the master as a normal pixel layer
+ *  6. Those source documents are closed without saving
  *
- * Same production rules as the UXP .psjs MVP:
- *  - Active document = master PSD
- *  - Multi-file open dialog
- *  - Open each file as a document
- *  - Merge (or take top pixel layer) → duplicate into master as ArtLayer
- *  - Name by filename
- *  - Close source without saving
- *  - NO Place Embedded / Place Linked / Smart Object pipeline
+ * No file picker. No format filter. Whatever Photoshop already has open will be imported.
  *
- * Run: File → Scripts → Browse… → ImportAsRasterLayers.jsx
- * Or copy into Presets/Scripts and restart Photoshop.
+ * Forbidden by design:
+ *  - Place Embedded / Place Linked
+ *  - Smart Object placement pipeline
  *
- * Camera Raw: disable JPEG/TIFF ACR support on production machines.
- * RAW formats are filtered out of the default dialog.
+ * Install:
+ *  Copy to Photoshop Presets/Scripts/ and restart Photoshop
+ *  Then: File → Scripts → ImportAsRasterLayers
  */
 
 #target photoshop
@@ -35,31 +36,10 @@ function stripExtension(name) {
   return String(name).replace(/\.[^.]+$/i, "");
 }
 
-function layerNameFromFile(file) {
-  var base = File.decode(file.name);
+function layerNameFromDoc(doc) {
+  var base = doc.name || "imported";
+  // Photoshop document names are often already without path
   return CONFIG.stripExtensionFromLayerName ? stripExtension(base) : base;
-}
-
-function isAllowedFile(file) {
-  return /\.(jpg|jpeg|png|tif|tiff|psd|psb|webp)$/i.test(file.name);
-}
-
-function pickFiles() {
-  // Multi-select open dialog (ExtendScript)
-  var files = File.openDialog(
-    "Select clothing source files to import as raster layers",
-    "Images:*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.psd;*.psb;*.webp",
-    true
-  );
-  if (!files) return [];
-  if (!(files instanceof Array)) files = [files];
-  var out = [];
-  for (var i = 0; i < files.length; i++) {
-    if (files[i] instanceof File && isAllowedFile(files[i])) {
-      out.push(files[i]);
-    }
-  }
-  return out;
 }
 
 function findTopLevelGroup(doc, name) {
@@ -72,7 +52,9 @@ function findTopLevelGroup(doc, name) {
 function ensureImportGroup(doc) {
   var g = findTopLevelGroup(doc, CONFIG.importGroupName);
   if (g) return g;
-  return doc.layerSets.add();
+  g = doc.layerSets.add();
+  g.name = CONFIG.importGroupName;
+  return g;
 }
 
 function unlockBackgroundIfNeeded(doc) {
@@ -85,15 +67,22 @@ function unlockBackgroundIfNeeded(doc) {
   }
 }
 
+function rasterizeActiveLayer() {
+  var idrasterizeLayer = stringIDToTypeID("rasterizeLayer");
+  var desc = new ActionDescriptor();
+  var ref = new ActionReference();
+  ref.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+  desc.putReference(charIDToTypeID("null"), ref);
+  executeAction(idrasterizeLayer, desc, DialogModes.NO);
+}
+
 function prepareMergedPixelLayer(doc, desiredName) {
   unlockBackgroundIfNeeded(doc);
-  // Dummy layer trick helps mergeVisibleLayers leave a named ArtLayer
-  // (classic production pattern from Import Folder as Layers scripts).
+  // Dummy layer helps mergeVisibleLayers leave a named ArtLayer
   doc.artLayers.add();
   doc.mergeVisibleLayers();
   var layer = doc.activeLayer;
   if (layer.kind === LayerKind.SMARTOBJECT) {
-    // Rasterize smart object contents to pixels
     rasterizeActiveLayer();
     layer = doc.activeLayer;
   }
@@ -114,22 +103,11 @@ function prepareTopPixelLayer(doc, desiredName) {
     rasterizeActiveLayer();
     layer = doc.activeLayer;
   }
-  // If still not a normal art layer, merge visible as fallback
   if (layer.kind !== LayerKind.NORMAL) {
     return prepareMergedPixelLayer(doc, desiredName);
   }
   layer.name = desiredName;
   return layer;
-}
-
-function rasterizeActiveLayer() {
-  // Action Manager: Layer → Rasterize → Layer
-  var idrasterizeLayer = stringIDToTypeID("rasterizeLayer");
-  var desc = new ActionDescriptor();
-  var ref = new ActionReference();
-  ref.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
-  desc.putReference(charIDToTypeID("null"), ref);
-  executeAction(idrasterizeLayer, desc, DialogModes.NO);
 }
 
 function assertNotSmartObject(layer) {
@@ -141,25 +119,35 @@ function assertNotSmartObject(layer) {
   return layer;
 }
 
-function importOneFile(file, masterDoc, importGroup) {
-  var desiredName = layerNameFromFile(file);
-  var sourceDoc = null;
+/**
+ * Collect every open document except the master.
+ * Snapshot references first — closing docs changes app.documents live.
+ */
+function collectSourceDocuments(masterDoc) {
+  var sources = [];
+  for (var i = 0; i < app.documents.length; i++) {
+    var doc = app.documents[i];
+    if (doc !== masterDoc) {
+      sources.push(doc);
+    }
+  }
+  return sources;
+}
+
+function importOneOpenDocument(sourceDoc, masterDoc, importGroup) {
+  var desiredName = layerNameFromDoc(sourceDoc);
   var prevDialogs = app.displayDialogs;
   app.displayDialogs = DialogModes.NO;
 
   try {
-    // CRITICAL: open as document — never place
-    sourceDoc = open(file);
-    if (!sourceDoc) {
-      throw new Error("Failed to open " + file.fsName);
-    }
+    app.activeDocument = sourceDoc;
 
     var sourceLayer =
       CONFIG.importMode === "topPixel"
         ? prepareTopPixelLayer(sourceDoc, desiredName)
         : prepareMergedPixelLayer(sourceDoc, desiredName);
 
-    // Duplicate ArtLayer into master → ordinary pixel layer
+    // Duplicate as ordinary ArtLayer into master — never Place
     var dup = sourceLayer.duplicate(masterDoc, ElementPlacement.PLACEATBEGINNING);
     app.activeDocument = masterDoc;
     masterDoc.activeLayer = dup;
@@ -173,26 +161,42 @@ function importOneFile(file, masterDoc, importGroup) {
     return dup;
   } finally {
     app.displayDialogs = prevDialogs;
-    if (sourceDoc) {
-      try {
+    try {
+      // Close the source tab after transfer
+      if (sourceDoc) {
         sourceDoc.close(SaveOptions.DONOTSAVECHANGES);
-      } catch (e) {
-        // ignore
       }
+    } catch (e) {
+      // ignore close errors
     }
   }
 }
 
 function main() {
   if (!app.documents.length) {
-    alert("Open the master PSD first, then run this script.");
+    alert("Open the master PSD first, then open the other photos as tabs.");
+    return;
+  }
+
+  if (app.documents.length < 2) {
+    alert(
+      "Need at least 2 open documents.\n\n" +
+        "1) Open your master PSD and keep it active\n" +
+        "2) Open other photos as tabs (ARW, JPG, PSD, etc.)\n" +
+        "3) Click back on the master PSD\n" +
+        "4) Run this script again"
+    );
     return;
   }
 
   var masterDoc = app.activeDocument;
   var masterName = masterDoc.name;
-  var files = pickFiles();
-  if (!files.length) return;
+  var sources = collectSourceDocuments(masterDoc);
+
+  if (!sources.length) {
+    alert("No other open documents to import.\nMake sure the master PSD is the active tab.");
+    return;
+  }
 
   var originalUnits = app.preferences.rulerUnits;
   app.preferences.rulerUnits = Units.PIXELS;
@@ -200,22 +204,22 @@ function main() {
   var importGroup = null;
   if (CONFIG.putIntoImportGroup) {
     importGroup = ensureImportGroup(masterDoc);
-    importGroup.name = CONFIG.importGroupName;
   }
 
   var okCount = 0;
   var errors = [];
   var lastImported = null;
 
-  for (var i = 0; i < files.length; i++) {
+  // Import from the end of the list so closing docs is safer
+  for (var i = 0; i < sources.length; i++) {
+    var src = sources[i];
+    var srcName = src.name;
     try {
-      // Re-resolve master in case focus drifted
       app.activeDocument = masterDoc;
-      lastImported = importOneFile(files[i], masterDoc, importGroup);
+      lastImported = importOneOpenDocument(src, masterDoc, importGroup);
       okCount++;
     } catch (err) {
-      errors.push(File.decode(files[i].name) + ": " + err.message);
-      // Close stray docs that are not the master
+      errors.push(srcName + ": " + err.message);
       try {
         if (app.activeDocument && app.activeDocument.name !== masterName) {
           app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
@@ -224,11 +228,14 @@ function main() {
     }
   }
 
-  app.activeDocument = masterDoc;
+  try {
+    app.activeDocument = masterDoc;
+  } catch (e3) {}
+
   if (CONFIG.activateLastImportedLayer && lastImported) {
     try {
       masterDoc.activeLayer = lastImported;
-    } catch (e3) {}
+    } catch (e4) {}
   }
 
   app.preferences.rulerUnits = originalUnits;
@@ -237,8 +244,8 @@ function main() {
     "Imported " +
     okCount +
     "/" +
-    files.length +
-    ' file(s) as raster layers into "' +
+    sources.length +
+    ' open document(s) as raster layers into "' +
     masterName +
     '".';
   if (errors.length) {
@@ -252,7 +259,6 @@ try {
   main();
 } catch (e) {
   if (e.number !== 8007) {
-    // 8007 = user cancel
     alert("Import failed: " + e.message + " (line " + e.line + ")");
   }
 }

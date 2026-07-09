@@ -1,47 +1,59 @@
-# Clothes Retouch — Import as Raster Layers (Photoshop 2026)
+# Clothes Retouch — Import Open Documents as Raster Layers
 
-Practical automation for apparel retouchers: pull many source photos into **one master PSD** as **ordinary pixel layers**, then auto-close the sources.
+## What it does now (Variant A)
 
-**Never** Place Embedded / Place Linked / Smart Object.
+1. You open the **master PSD** and keep it active  
+2. You open any other photos in Photoshop as tabs (**ARW, JPG, PNG, TIFF, PSD, PSB**, etc.)  
+3. You run the script  
+4. Script copies every **other open document** into the master as a **normal pixel layer**  
+5. Source tabs are closed  
+6. Only the master stays open  
 
-## Quick start (fastest for production)
+**No Explorer / file picker. No format filter.**  
+Whatever Photoshop already opened — the script can import.
 
-1. Open the master PSD.
-2. Run either:
-   - `scripts/ImportAsRasterLayers.psjs` — modern UXP script (Photoshop 23.5+)
-   - `scripts/ImportAsRasterLayers.jsx` — classic ExtendScript (drop-in, zero tooling)
-3. Pick JPEG/PNG/TIFF/PSD/PSB sources.
-4. Each file opens → content becomes a **normal layer** named after the file → source closes.
-5. Only the master PSD remains.
+---
 
-Optional UXP panel scaffold: `plugin/` (load with UXP Developer Tool).
+## Download this file
 
-## Why this stack
+`photoshop-clothes-import/scripts/ImportAsRasterLayers.jsx`
 
-| Goal | Recommendation |
-| --- | --- |
-| Ship to retoucher **today** | **JSX** or **`.psjs`** script |
-| Scale to a studio tool (modes, log, progress UI) | **UXP plugin** reusing the same open→duplicate pipeline |
-| Avoid Camera Raw / SO traps | Open as document + `duplicateLayers` / `ArtLayer.duplicate` — never Place |
+---
 
-Full research notes: [`docs/RESEARCH-2026.md`](docs/RESEARCH-2026.md)  
-Architecture & modes: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)  
-Answer-style writeup: [`docs/SOLUTION.md`](docs/SOLUTION.md)
+## Install forever
 
-## Hard rules encoded in the MVP
+1. Copy `ImportAsRasterLayers.jsx` into Photoshop Scripts folder:
 
-1. Receiver = `app.activeDocument` at launch.
-2. Sources opened with `app.open` / `open(File)` — **not** place descriptors.
-3. Pixel guarantee: `mergeVisibleLayers` or top pixel layer + `rasterize` if a Smart Object somehow appears.
-4. Transfer with `duplicateLayers(..., master)` / `layer.duplicate(master)`.
-5. `closeWithoutSaving` / `DONOTSAVECHANGES` on every source.
-6. Default picker excludes RAW/DNG (ACR pipeline).
+**Windows**
+```text
+C:\Program Files\Adobe\Adobe Photoshop 2026\Presets\Scripts\
+```
 
-## Machine setup (required for stable JPEG/TIFF batches)
+**Mac**
+```text
+/Applications/Adobe Photoshop 2026/Presets/Scripts/
+```
 
-Photoshop → Preferences → Camera Raw → File Handling:
+2. Restart Photoshop  
+3. Use: **File → Scripts → ImportAsRasterLayers**
 
-- JPEG/HEIC Handling → **Disable JPEG/HEIC Support**
-- TIFF Handling → **Disable TIFF Support**
+---
 
-Otherwise ACR may intercept opens (and “Open as Smart Objects” can break the pixel-layer contract).
+## Daily use
+
+1. Open master PSD  
+2. Open all needed photos as tabs (including ARW)  
+3. Click the **master PSD** tab again  
+4. Run **ImportAsRasterLayers**  
+5. Done  
+
+---
+
+## Notes
+
+- Active tab must be the master before you run the script  
+- Layers go into group `IMPORT` by default  
+- Result layers are ordinary pixels, not Smart Objects  
+- Also available: `ImportAsRasterLayers.psjs` and `plugin/` panel scaffold  
+
+Docs: `docs/SOLUTION.md`, `docs/ARCHITECTURE.md`
