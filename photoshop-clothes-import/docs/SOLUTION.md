@@ -101,24 +101,25 @@ Research-backed plan + MVP for importing many clothing sources into one master P
 
 ---
 
-## 5. Technical plan (Block 3)
+## 5. Technical plan (Block 3) — Variant A
 
-1. Capture `master = app.activeDocument` (+ store `id`).
-2. Multi-select files (extensions whitelist; no RAW).
+1. Capture `master = app.activeDocument` (+ store id/name).
+2. Collect `app.documents` except master (snapshot list first).
 3. Enter modal scope (UXP).
 4. Optional: ensure group `IMPORT`.
-5. Per file:
-   - `open` as document
+5. Per open source document:
+   - Activate source
    - Mode merged: `mergeVisibleLayers` (JSX often adds empty layer first)
    - Mode topPixel: use active/top art layer
    - If `SMARTOBJECT` → `rasterize`
-   - `duplicateLayers([layer], master)` / `duplicate(master)`
+   - `duplicateLayers([layer], master)` / `ArtLayer.duplicate(master)`
    - Rename; move into `IMPORT` if enabled
-   - `closeWithoutSaving`
-6. Re-activate master by id; select last imported layer.
+   - `closeWithoutSaving` / `DONOTSAVECHANGES`
+6. Re-activate master; select last imported layer.
 7. Summary alert / log.
 
-**Pixel guarantee:** no Place descriptors; post-duplicate kind check + rasterize.
+**Pixel guarantee:** no Place descriptors; post-duplicate kind check + rasterize.  
+**Formats:** whatever Photoshop already opened — including ARW after ACR.
 
 ---
 
@@ -134,16 +135,16 @@ Research-backed plan + MVP for importing many clothing sources into one master P
 
 ```javascript
 const master = app.activeDocument;
-const files = await fs.getFileForOpening({ allowMultiple: true, types: [...] });
+const sources = [...app.documents].filter((d) => d.id !== master.id);
 
 await core.executeAsModal(async () => {
-  for (const entry of files) {
-    const src = await app.open(entry);          // document, not Place
+  for (const src of sources) {
+    app.activeDocument = src;
     await src.mergeVisibleLayers();
     const layer = src.activeLayers[0];
-    if (layer.kind === constants.LayerKind.SMARTOBJECT) await layer.rasterize();
-    layer.name = entry.name.replace(/\.[^.]+$/, "");
-    const [imported] = await src.duplicateLayers([layer], master);
+    if (isSmartObject(layer)) await layer.rasterize();
+    layer.name = src.name.replace(/\.[^.]+$/, "");
+    await src.duplicateLayers([layer], master);
     src.closeWithoutSaving();
   }
   app.activeDocument = master;
@@ -154,13 +155,17 @@ await core.executeAsModal(async () => {
 
 ```javascript
 var master = app.activeDocument;
-var files = File.openDialog("Sources", "*.jpg;*.png;*.tif;*.psd", true);
-for (var i = 0; i < files.length; i++) {
-  var src = open(files[i]);
+var sources = [];
+for (var i = 0; i < app.documents.length; i++) {
+  if (app.documents[i] !== master) sources.push(app.documents[i]);
+}
+for (var j = 0; j < sources.length; j++) {
+  var src = sources[j];
+  app.activeDocument = src;
   src.artLayers.add();
   src.mergeVisibleLayers();
   var layer = src.activeLayer;
-  layer.name = files[i].name.replace(/\.[^.]+$/i, "");
+  layer.name = src.name.replace(/\.[^.]+$/i, "");
   layer.duplicate(master, ElementPlacement.PLACEATBEGINNING);
   src.close(SaveOptions.DONOTSAVECHANGES);
 }
