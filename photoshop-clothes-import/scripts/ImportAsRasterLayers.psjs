@@ -159,7 +159,7 @@ async function assertRasterLayer(layer) {
   if (isSmartObject(layer)) {
     await layer.rasterize();
   }
-  if (layer.kind !== constants.LayerKind.NORMAL && typeof layer.rasterize === "function") {
+  if (!isPixelLayer(layer) && typeof layer.rasterize === "function") {
     await layer.rasterize();
   }
   return layer;
