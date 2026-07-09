@@ -1,0 +1,42 @@
+{
+  "id": "com.studio.clothes.import-raster-layers",
+  "name": "Clothes Import Raster Layers",
+  "version": "0.1.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": [
+    {
+      "app": "PS",
+      "minVersion": "24.0.0"
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "importPanel",
+      "label": {
+        "default": "Import Raster"
+      },
+      "minimumSize": {
+        "width": 280,
+        "height": 360
+      },
+      "maximumSize": {
+        "width": 2000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 320,
+        "height": 480
+      },
+      "preferredFloatingSize": {
+        "width": 320,
+        "height": 480
+      }
+    }
+  ],
+  "requiredPermissions": {
+    "localFileSystem": "request",
+    "clipboard": "readAndWrite"
+  }
+}
