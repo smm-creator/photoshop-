@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cloth Importer</title>
+    <style>
+        /* Базовые токены Spectrum (Photoshop Dark Theme) */
+        :root {
+            --color-bg: #2d2d2d;
+            --color-bg-secondary: #393939;
+            --color-border: #555;
+            --color-text: #e0e0e0;
+            --color-text-muted: #999;
+            --color-accent: #6699ff;
+            --color-accent-hover: #4d80ff;
+            --color-success: #4caf50;
+            --color-error: #f44336;
+            --color-warning: #ff9800;
+            --radius: 4px;
+            --gap: 8px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: "Adobe Clean", "Segoe UI", Arial, sans-serif;
+            font-size: 12px;
+            background: var(--color-bg);
+            color: var(--color-text);
+            padding: var(--gap);
+            user-select: none;
+        }
+
+        h2 {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--color-accent);
+            margin-bottom: var(--gap);
+            letter-spacing: 0.5px;
+        }
+
+        .section {
+            background: var(--color-bg-secondary);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            padding: var(--gap);
+            margin-bottom: var(--gap);
+        }
+
+        .section-title {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--color-text-muted);
+            letter-spacing: 1px;
+            margin-bottom: var(--gap);
+        }
+
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: var(--gap);
+            margin-bottom: 6px;
+        }
+
+        .form-row label {
+            width: 100px;
+            color: var(--color-text-muted);
+            flex-shrink: 0;
+        }
+
+        select, input[type="text"] {
+            flex: 1;
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            color: var(--color-text);
+            padding: 3px 6px;
+            font-size: 12px;
+            outline: none;
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: var(--color-accent);
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: var(--gap);
+            margin-bottom: 6px;
+            cursor: pointer;
+        }
+
+        .checkbox-row input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+            accent-color: var(--color-accent);
+        }
+
+        .checkbox-row span {
+            color: var(--color-text);
+        }
+
+        #groupNameRow {
+            margin-left: 22px;
+        }
+
+        button {
+            display: block;
+            width: 100%;
+            padding: 8px;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: background 0.15s, opacity 0.15s;
+        }
+
+        #importBtn {
+            background: var(--color-accent);
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        #importBtn:hover { background: var(--color-accent-hover); }
+        #importBtn:active { opacity: 0.85; }
+        #importBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        #progressBar {
+            height: 4px;
+            background: var(--color-border);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: var(--gap);
+            display: none;
+        }
+
+        #progressFill {
+            height: 100%;
+            background: var(--color-accent);
+            width: 0%;
+            transition: width 0.2s;
+        }
+
+        #status {
+            font-size: 11px;
+            color: var(--color-text-muted);
+            min-height: 16px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #status.success { color: var(--color-success); }
+        #status.error   { color: var(--color-error); }
+
+        .log-area {
+            display: none;
+            margin-top: var(--gap);
+        }
+
+        #logBox {
+            background: var(--color-bg);
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            padding: 6px;
+            font-size: 10px;
+            color: var(--color-text-muted);
+            height: 80px;
+            overflow-y: auto;
+            font-family: monospace;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Cloth Importer</h2>
+
+<!-- Настройки режима -->
+<div class="section">
+    <div class="section-title">Режим импорта</div>
+
+    <div class="form-row">
+        <label>Что брать:</label>
+        <select id="importMode">
+            <option value="merged" selected>Merged (все слои → один)</option>
+            <option value="toplayer">Верхний слой</option>
+            <option value="background">Нижний / Background</option>
+        </select>
+    </div>
+</div>
+
+<!-- Настройки организации -->
+<div class="section">
+    <div class="section-title">Организация</div>
+
+    <div class="checkbox-row">
+        <input type="checkbox" id="useGroup" checked />
+        <span>Складывать в группу</span>
+    </div>
+    <div class="form-row" id="groupNameRow">
+        <label>Имя группы:</label>
+        <input type="text" id="groupName" value="IMPORT" maxlength="40" />
+    </div>
+</div>
+
+<!-- Кнопка + прогресс -->
+<button id="importBtn">▶ Импортировать файлы</button>
+
+<div id="progressBar">
+    <div id="progressFill"></div>
+</div>
+
+<div id="status">Готов к импорту</div>
+
+<!-- Лог -->
+<div class="log-area" id="logArea">
+    <div class="section-title" style="margin-top:4px">Лог</div>
+    <div id="logBox"></div>
+</div>
+
+<script src="index.js"></script>
+</body>
+</html>

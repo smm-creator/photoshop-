@@ -1,0 +1,266 @@
+// =============================================================================
+//  ClothImporter.psjs  —  UXP Script для Photoshop 2025/2026
+//
+//  HOW TO RUN:
+//    File > Scripts > Browse… → выбрать этот .psjs файл
+//
+//  Расширение .psjs обязательно для UXP-скриптов (не .js, не .jsx)
+//  UXP Scripting доступен с Photoshop v23.5+
+//
+//  ЧТО ДЕЛАЕТ:
+//    То же, что JSX MVP, но на современном JavaScript (ES2018+):
+//    async/await, деструктуризация, template literals и т.д.
+//
+//  ВАЖНО:
+//    Весь код открытия/закрытия/дублирования документов
+//    обёрнут в executeAsModal — обязательное требование UXP API.
+//
+//    Открытие через batchPlay (вместо app.open) гарантирует подавление
+//    диалога Camera Raw для JPEG/TIFF с CRS-метаданными.
+// =============================================================================
+
+const { app, core, action } = require("photoshop");
+const { localFileSystem: fs } = require("uxp").storage;
+
+// ─── НАСТРОЙКИ ───────────────────────────────────────────────────────────────
+const CFG = {
+    useImportGroup: true,
+    importGroupName: "IMPORT",
+    activateLastLayer: true,
+    mode: "merged", // "merged" | "toplayer"
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function main() {
+    if (app.documents.length === 0) {
+        await app.showAlert("Нет открытых документов.\nСначала откройте основной PSD.");
+        return;
+    }
+
+    const mainDoc = app.activeDocument;
+    const mainDocId = mainDoc.id;
+
+    // Показать диалог выбора файлов ВНЕ executeAsModal
+    // (file picker — модальный диалог ОС, нельзя вызывать внутри PS modal)
+    let entries;
+    try {
+        entries = await fs.getFileForOpening({
+            allowMultiple: true,
+            types: ["psd", "psb", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif"],
+        });
+    } catch (e) {
+        return; // пользователь отменил
+    }
+
+    if (!entries || entries.length === 0) return;
+
+    // Нормализуем в массив (API возвращает массив при allowMultiple, но страхуемся)
+    const fileList = Array.isArray(entries) ? entries : [entries];
+
+    let imported = 0;
+    const errors = [];
+    let lastLayer = null;
+
+    // Все операции с документами — внутри executeAsModal
+    await core.executeAsModal(
+        async (executionContext) => {
+            // Обновлять прогресс в заголовке
+            executionContext.reportProgress({ value: 0, commandName: "Импорт файлов..." });
+
+            // Найти/создать группу IMPORT
+            let importGroup = null;
+            if (CFG.useImportGroup) {
+                importGroup = await getOrCreateGroup(mainDoc, CFG.importGroupName);
+            }
+
+            for (let i = 0; i < fileList.length; i++) {
+                const entry = fileList[i];
+                const progress = Math.round(((i + 1) / fileList.length) * 100);
+                executionContext.reportProgress({
+                    value: progress,
+                    commandName: `Импорт (${i + 1}/${fileList.length}): ${entry.name}`,
+                });
+
+                try {
+                    const layer = await importSingleFile(entry, mainDoc, importGroup);
+                    if (layer) {
+                        lastLayer = layer;
+                        imported++;
+                    }
+                } catch (e) {
+                    errors.push(`• ${entry.name}: ${e.message}`);
+                    console.error(`[ClothImporter] Ошибка при импорте ${entry.name}:`, e);
+                }
+            }
+
+            // Вернуть фокус на основной документ
+            const docToActivate = app.documents.find((d) => d.id === mainDocId);
+            if (docToActivate) app.activeDocument = docToActivate;
+
+            // Активировать последний слой
+            if (CFG.activateLastLayer && lastLayer) {
+                try {
+                    mainDoc.activeLayers = [lastLayer];
+                } catch (e) {}
+            }
+        },
+        { commandName: "ClothImporter: Import Files as Pixel Layers" }
+    );
+
+    // Итоговый алерт
+    let msg = `Импорт завершён.\n\nДобавлено слоёв: ${imported} из ${fileList.length}`;
+    if (errors.length > 0) {
+        msg += `\n\nОшибки:\n${errors.join("\n")}`;
+    }
+    await app.showAlert(msg);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  importSingleFile
+// ─────────────────────────────────────────────────────────────────────────────
+async function importSingleFile(entry, mainDoc, importGroup) {
+    const baseName = entry.name.replace(/\.[^.]+$/, "");
+
+    // Открыть файл через batchPlay — подавляет Camera Raw диалог
+    // (batchPlay по умолчанию не показывает диалоги — аналог DialogModes.NO в JSX)
+    let sourceDoc;
+    try {
+        sourceDoc = await openFileViaBatchPlay(entry);
+    } catch (e) {
+        // Fallback на прямой app.open (может показать диалог для RAW)
+        sourceDoc = await app.open(entry);
+    }
+
+    try {
+        let newLayer;
+
+        if (CFG.mode === "merged") {
+            newLayer = await importMerged(sourceDoc, mainDoc);
+        } else {
+            newLayer = await importTopLayer(sourceDoc, mainDoc);
+        }
+
+        // Переименовать слой
+        newLayer.name = baseName;
+
+        // Закрыть источник без сохранения
+        await sourceDoc.closeWithoutSaving();
+
+        // Вернуть фокус на mainDoc
+        app.activeDocument = mainDoc;
+
+        // Переместить в группу IMPORT
+        if (importGroup) {
+            await moveLayerIntoGroup(newLayer, importGroup);
+        }
+
+        return newLayer;
+
+    } catch (e) {
+        try {
+            await sourceDoc.closeWithoutSaving();
+        } catch (e2) {}
+        app.activeDocument = mainDoc;
+        throw e;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Режим merged: flatten → duplicate
+// ─────────────────────────────────────────────────────────────────────────────
+async function importMerged(sourceDoc, mainDoc) {
+    // flatten() схлопывает всё в один Background (гарантированно pixel layer)
+    await sourceDoc.flatten();
+
+    // После flatten в документе один слой
+    const flatLayer = sourceDoc.layers[0];
+
+    // Дублируем в mainDoc — возвращает новый Layer в mainDoc
+    const newLayer = await flatLayer.duplicate(mainDoc);
+
+    return newLayer;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Режим toplayer: верхний слой + rasterize Smart Object
+// ─────────────────────────────────────────────────────────────────────────────
+async function importTopLayer(sourceDoc, mainDoc) {
+    let topLayer = sourceDoc.layers[0];
+
+    if (!topLayer) {
+        return importMerged(sourceDoc, mainDoc);
+    }
+
+    // Растеризовать Smart Object если нужно
+    if (topLayer.kind === "smartObject") {
+        await topLayer.rasterize();
+        topLayer = sourceDoc.activeLayers[0]; // обновляем ссылку
+    }
+
+    const newLayer = await topLayer.duplicate(mainDoc);
+    return newLayer;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  openFileViaBatchPlay  —  открыть файл без Camera Raw диалога
+// ─────────────────────────────────────────────────────────────────────────────
+async function openFileViaBatchPlay(entry) {
+    // nativePath даёт нам абсолютный путь к файлу
+    const nativePath = entry.nativePath;
+
+    await action.batchPlay(
+        [
+            {
+                _obj: "open",
+                null: { _path: nativePath, _kind: "local" },
+                _options: { dialogOptions: "dontDisplay" },
+            },
+        ],
+        { synchronousExecution: false }
+    );
+
+    // После batchPlay open активный документ — это открытый файл
+    return app.activeDocument;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  moveLayerIntoGroup  —  переместить слой в группу через batchPlay
+// ─────────────────────────────────────────────────────────────────────────────
+async function moveLayerIntoGroup(layer, group) {
+    // Прямого API для move-into-group в UXP DOM нет,
+    // используем batchPlay с целевым layerSection
+    await action.batchPlay(
+        [
+            {
+                _obj: "move",
+                _target: [{ _ref: "layer", _id: layer.id }],
+                to: { _ref: "layerSection", _id: group.id },
+                adjustment: { _enum: "ordinal", _value: "front" },
+                _options: { dialogOptions: "dontDisplay" },
+            },
+        ],
+        { synchronousExecution: false }
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  getOrCreateGroup  —  найти или создать группу
+// ─────────────────────────────────────────────────────────────────────────────
+async function getOrCreateGroup(doc, groupName) {
+    // Ищем существующую группу (рекурсивно не идём — только верхний уровень)
+    for (const layer of doc.layers) {
+        if (layer.kind === "group" && layer.name === groupName) {
+            return layer;
+        }
+    }
+
+    // Создаём новую группу
+    const newGroup = await doc.createLayerGroup({ name: groupName });
+    return newGroup;
+}
+
+// Запустить
+main().catch((e) => {
+    console.error("[ClothImporter] Fatal error:", e);
+    app.showAlert(`Ошибка ClothImporter:\n${e.message}`);
+});

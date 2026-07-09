@@ -1,0 +1,31 @@
+{
+  "id": "com.clothimporter.plugin",
+  "name": "Cloth Importer",
+  "version": "1.0.0",
+  "manifestVersion": 5,
+  "host": [
+    {
+      "app": "PS",
+      "minVersion": "23.5.0"
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "mainPanel",
+      "label": {
+        "default": "Cloth Importer"
+      },
+      "minimumSize": { "width": 220, "height": 280 },
+      "maximumSize": { "width": 500, "height": 800 },
+      "preferredDockedSize": { "width": 260, "height": 360 }
+    }
+  ],
+  "requiredPermissions": {
+    "localFileSystem": "request",
+    "allowCodeGenerationFromStrings": false,
+    "ipc": {
+      "allowedDomains": []
+    }
+  }
+}
